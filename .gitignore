@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+.Python
+
+# Environments
+.venv/
+venv/
+env/
+ENV/
+.uv-cache/
+.uv-python/
+
+# Packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Testing and caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs and local outputs
+*.log
+logs/
+outputs/
+
+# Data artifacts
+data/processed/*.csv
+data/processed/*.parquet
+data/processed/*.feather
+
+# Secrets and environment files
+.env
+.env.*
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

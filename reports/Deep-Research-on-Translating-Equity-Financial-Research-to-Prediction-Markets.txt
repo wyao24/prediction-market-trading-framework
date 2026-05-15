@@ -1,0 +1,496 @@
+# Translating Trader Classification and Market‑Abuse Detection to Prediction Markets
+
+## Executive summary
+
+Research and enforcement frameworks developed for equity and derivatives markets—distinguishing **informed vs. uninformed** flow and detecting **insider trading, fraud, and manipulation**—transfer to prediction markets surprisingly well **at the microstructure level**, but require systematic adaptations for (i) **bounded payoffs ($0–$1)**, (ii) **event‑time “fundamentals”** (resolution rules rather than cashflows), and (iii) **platform design choices** (central limit order book vs. scoring‑rule AMM; KYC vs. pseudonymous on‑chain settlement). citeturn18view1turn18view2turn18view8turn7search2turn18view19
+
+Three high-level translations are the most practically important:
+
+Prediction markets replace “firm fundamentals” with **contract specification + settlement integrity**. Regulators explicitly point to manipulation risk via **cash‑settlement data sources** and incentives to “manipulate or artificially influence” those sources. citeturn18view2turn18view3
+
+Prediction markets replace “retail vs institutional” with **maker vs taker + automation vs discretionary + cross‑market sophistication**. Transaction‑level evidence from a CFTC‑regulated prediction market shows systematic differences between liquidity‑taking and liquidity‑providing roles, and platform research on older election markets indicates that efficiency can emerge from interactions of “mistake‑prone” participants with a smaller set of rational price‑setting (and machine) traders. citeturn18view15turn18view16turn18view17
+
+Manipulation taxonomies (spoofing/layering, wash trading, prearranged trading) still apply, but the “why now?” and “how detected?” differ because thinness, tight ticks, and event‑time deadlines make some spoofing and wash‑trade patterns **cheaper**, while on‑chain transparency can make some coordination patterns **more observable** (though identities are harder). citeturn18view11turn13view0turn18view18
+
+Across both regulated and crypto prediction markets, the most transferable behaviors/variables (and therefore the foundation of a rigorous surveillance stack) are:
+
+- **Order aggressiveness and timing around information arrivals** (public or private). citeturn18view15turn21view5turn7search25  
+- **Price impact and “toxicity” analogs** (probability updates per unit net order flow; sensitivity to large trades). citeturn18view19turn8view3  
+- **Order‑book dynamics and cancellation patterns** consistent with spoofing or disruption. citeturn18view11turn18view6  
+- **Network structure and coordinated accounts** consistent with wash trading or “Sybil” behavior. citeturn13view0turn8view3  
+- **Outcome‑influence / settlement‑source influence** (“outcome manipulation”) risk unique in intensity to event contracts. citeturn21view0turn18view2turn18view6  
+
+Operationally, the recommended approach is a **hybrid surveillance architecture**: real‑time rule‑based screens for disruptive order tactics and imminent MNPI windows; batch graph analytics for wash trading/Sybil clustering; and event‑conditioned statistical tests and ML for informed‑trading likelihood scoring. This is aligned with regulator expectations that designated contract markets conduct monitoring, maintain audit trails, and prevent manipulation and abusive practices. citeturn18view1turn7search0turn18view6turn6search23
+
+## Market structure assumptions and cross‑market mapping
+
+Prediction markets are not one market design; they are a design space. Two platform dimensions dominate how equities‑style taxonomies translate:
+
+**Trading mechanism**
+- **Order‑book exchanges**: continuous matching, bid–ask spreads, and maker/taker behavior (including “market orders” implemented as aggressively priced limit orders on some platforms). citeturn7search9turn18view15turn7search15  
+- **Scoring‑rule / AMM markets**: prices driven by a cost function; the liquidity parameter governs how “sticky” probabilities are and bounds the market maker’s worst‑case loss in classic LMSR designs. citeturn18view8turn18view9  
+
+**Identity and auditability regime**
+- **KYC + audit trails (regulated DCM model)**: the expectation is surveillance, audit trails, and enforcement capacity; exchange rules can directly restrict insiders and prohibit wash trading/spoofing. citeturn18view1turn18view6turn18view11  
+- **Pseudonymous on‑chain settlement (crypto model)**: settlement provides a public transaction record; however, identity linkage becomes probabilistic, and “volume” must be measured carefully because tokenized event claims can involve minting/burning/conversion beyond pure exchange matches. citeturn18view18turn8view3turn7search2  
+
+These two axes yield four archetypes (Order‑book × AMM) × (KYC × pseudonymous). The report below is written to be platform‑agnostic by stating which steps assume which archetype.
+
+image_group{"layout":"carousel","aspect_ratio":"16:9","query":["Polymarket order book interface screenshot","Kalshi event contract order book interface screenshot","prediction market AMM interface LMSR screenshot","UMA optimistic oracle resolution diagram"],"num_per_query":1}
+
+### Equity‑market variables vs prediction‑market counterparts
+
+The table below maps standard equity microstructure variables and surveillance signals into prediction‑market counterparts. The mapping draws on (i) official regulatory framing of event‑contract integrity and manipulation susceptibility, (ii) prediction‑market mechanism design work on binary payoffs and LMSR‑style price formation, and (iii) recent transaction‑level studies of prediction‑market order books and on‑chain settlement. citeturn18view1turn18view8turn18view15turn18view19turn7search2
+
+| Equity / derivatives concept | Prediction‑market analogue | What changes in practice |
+|---|---|---|
+| “Fundamental value” tied to cashflows | **Event resolution value** ($0/$1 per share; or one‑of‑K categorical) | Settlement rules, data source integrity, and disputes can create “resolution basis risk.” citeturn0search1turn18view2turn18view6 |
+| Signed order flow; trade direction | **YES/NO net flow**, plus maker/taker labeling (if available) | “Shorting” often appears as buying NO; order types may be simplified; some platforms implement market orders as aggressive limit orders. citeturn7search9turn18view15turn18view19 |
+| Price impact (Δprice per volume) | **Δprobability per net flow**, often nonlinear near 0/1 | Bounded prices + discrete ticks cause nonlinearity; large trades can be more informative (or more manipulative) in thin markets. citeturn18view19turn18view16 |
+| Bid–ask spread and depth | **Cent‑denominated spread** (often large fraction of contract value) | Spreads can be dominated by fees and the $1 no‑arbitrage bound; in some markets best YES+NO offers can exceed $1 after fees. citeturn18view15turn10search10 |
+| Tick size and price clustering | **Tick granularity in cents** (e.g., 1¢ increments) | With prices ∈ [0,1], 1¢ is a large relative grid; microstructure “frictions” are amplified near mid‑probabilities. citeturn18view15turn10search10 |
+| Event studies around earnings/M&A | **Event‑window tests** around public revelations or resolution | The “event” is the underlying question; key windows include rule changes, resolution clarifications, official data releases, and leaks. citeturn18view2turn7search25turn12view1 |
+| Options chains and informed options volume | **Binary claim portfolios** across strikes/threshold bins or related markets | Some platforms list sets of contracts forming implied density forecasts; these can be “options‑like” without having options per se. citeturn18view14turn18view9 |
+| Spoofing / layering in LOB | Same: **intent‑to‑cancel depth manipulation** | Detection relies on order lifetimes, cancellation bursts, and post‑cancellation opposite‑side fills; legal definitions still apply. citeturn18view11turn18view6 |
+| Wash trades / prearranged trades | Same, plus on‑chain “self‑trading” variants | Clustering methods are important because wash trading can resemble “legitimate” market making; network closure is diagnostic. citeturn13view0turn8view2 |
+| Broker/clearing audit trail | Platform logs, member account metadata, and possibly on‑chain traces | Regulated venues can label members and enforce insider restrictions; on‑chain venues require probabilistic entity resolution. citeturn18view1turn18view6turn18view18 |
+
+## Transferable trader taxonomies and behavioral signals
+
+### Translating “retail vs institutional” into prediction markets
+
+Unlike equities, prediction markets historically lack a stable institutional ecosystem of mutual funds, index funds, and long‑horizon mandates. The more faithful translation is to classify participants by **role and sophistication**, not by formal institution type:
+
+- **Liquidity takers** (immediacy demanders) vs **liquidity makers** (spread earners). Transaction‑level evidence from a regulated prediction market emphasizes that makers/takers face systematically different economics. citeturn18view15turn10search14  
+- **Human discretionary** vs **machine/algorithmic** participants. Evidence from election prediction markets indicates machine traders can enforce arbitrage bounds and stabilize prices. citeturn18view16turn18view17  
+- **Single‑market specialists** vs **multi‑market/cross‑market arbitrageurs**, which becomes especially relevant when tokenized event claims create multiple trading “pathways.” citeturn8view3turn18view19  
+
+For “retail‑like” activity, the most robust proxies are behavioral rather than demographic: high urgency (aggressive price‑crossing), limited diversification, limited order management sophistication, high fee sensitivity errors, and limited cross‑market arbitrage. citeturn18view15turn10search10turn18view16
+
+For “institutional‑like” activity, the proxies are: persistent two‑sided quoting, high cancel/replace skill, cross‑market hedging/arbitrage, and systematic latency‑sensitive reaction to public announcements. citeturn18view15turn8view3turn21view5
+
+### Translating “informed vs uninformed” into prediction markets
+
+“Informed trading” remains definable as **trading that moves prices toward eventual truth (or toward the post‑information consensus)**, but “truth” in prediction markets is determined by:
+
+- factual reality, plus  
+- contract wording interpretation, plus  
+- resolution/oracle processes and dispute rules. citeturn0search1turn0search29turn18view2  
+
+This creates three informed‑trading channels that are less separable in equities:
+
+**Information about the world**: MNPI about an outcome (e.g., a decision or status known to a small group before public release). Regulators explicitly treat misuse of confidential information (in breach of duty) as within anti‑fraud authority for CFTC‑regulated markets. citeturn18view1turn18view13turn7search1  
+
+**Information about the market**: knowledge of latent order flow, platform matching quirks, or fee curves; akin to speed/structure advantage rather than “inside” knowledge. Platform documentation describing “market orders” as marketable limit orders and variable fees implies structural edges that can look like “informativeness” if not controlled for. citeturn7search9turn10search10turn18view15  
+
+**Information about settlement**: knowledge of how resolution will be interpreted or contested (wording ambiguity, source data release timing, oracle dispute likelihood). Regulators emphasize settlement‑source integrity and manipulation resistance as a core design and surveillance concern. citeturn18view2turn18view3turn18view6  
+
+### Key transferable variables and how to compute them in prediction markets
+
+The items below are the most “portable” variables from equity microstructure and market abuse detection; each can be computed for order‑book prediction markets, and many can be adapted to AMMs by translating trades into state updates of the cost function.
+
+**Trade size**  
+In prediction markets, “size” should be normalized along at least two axes: (i) **notional at risk** and (ii) **maximum payout** (bounded by $1/share). Fee schedules can be nonlinear in price, making raw size less comparable across probability levels. citeturn10search10turn18view15  
+For AMMs, “size” maps to **marginal cost paid to move the probability** under the cost function; the LMSR formulation makes the liquidity parameter explicit. citeturn18view8turn18view9  
+
+**Order aggressiveness**  
+Order aggressiveness (crossing the spread vs providing liquidity) is unusually central in prediction markets because order types can be simplified and the spread can be a large fraction of contract value. A regulated‑market analysis highlights the maker/taker distinction and notes the bid–ask spread can be driven by fee considerations and the structure of YES/NO pricing constraints. citeturn18view15turn10search14  
+On platforms where “market orders” are implemented as marketable limit orders, aggression can be measured by **distance from mid** and **immediate fill ratio**. citeturn7search9turn7search15  
+
+**Timing around events and information releases**  
+Prediction markets have an unusually crisp event clock: the time to expiry/resolution and the schedule of key public releases (e.g., official data prints) can be directly encoded as features. Public guidance explicitly highlights the risk of insider trading for contracts based on “actions or status of a person or small group,” such as injuries, where insiders may know information earlier. citeturn7search25turn18view2turn18view6  
+
+**Price impact and “manipulation vulnerability”**  
+Price impact in prediction markets is naturally interpretable as “probability impact.” Recent on‑chain prediction‑market research quantifies manipulation vulnerability via a price‑impact coefficient that declines as markets deepen, consistent with thin markets being more price‑impact sensitive and therefore more manipulation‑susceptible. citeturn8view3turn18view18  
+
+**Order‑book dynamics (depth, imbalance, replenishment)**  
+Order‑book imbalance, depth at top levels, and replenishment speed remain core signals for informed or manipulative activity. Spoofing detection in other order‑book markets uses order placement distance, cancellations, and multiscale order‑flow dynamics—feature families that are directly portable to order‑book prediction markets. citeturn0search4turn18view11  
+
+**Options‑like positions and outcome‑set structure**  
+Binary prediction contracts are structurally similar to digital claims (pay $1 if event occurs, else $0). Mechanism design work on prediction market makers explicitly motivates binary payoff structures and shows how pricing functions map positions to probability quotes. citeturn18view9turn18view8  
+Separately, some regulated prediction market designs can produce implied distributions by listing sets of contracts over bins, enabling density‑forecast inference. citeturn18view14  
+
+**Network/coordinated accounts**  
+Coordination is observable either through account graphs (KYC venues) or address graphs (on‑chain). Official academic work proposes network‑closure detection of wash trading and applies it to an on‑chain prediction market, emphasizing that wash trading can mimic legitimate market making and therefore needs graph structure, not just local heuristics. citeturn13view0turn8view2  
+
+**Cancellation patterns and disruptive trading**  
+In derivatives markets, spoofing is framed as bidding/offering with intent to cancel before execution; interpretive guidance highlights patterns such as creating false depth, overloading quotation systems, and delaying others’ executions as part of spoofing behavior. citeturn18view11turn6search1  
+A regulated prediction market’s rulebook explicitly includes prohibitions on wash trading, spoofing, and other abusive trading, creating a direct compliance bridge for prediction‑market surveillance. citeturn18view6turn18view7  
+
+## What changes or is absent in prediction markets
+
+### Liquidity, ticks, and the “meaning” of a spread
+
+Prediction markets often have both **thin participation** and **high relative frictions** because contracts are priced between 0 and 1. When the quote grid is in cents, a 1–5 cent spread can be a very large percentage of the contract’s value, making immediacy more expensive than in many equity settings. citeturn18view15turn10search10  
+Moreover, because YES and NO prices should be linked by a $1 constraint, the realized ability to arbitrage can be limited by fees and execution risk; transaction‑level analysis describes cases where the best YES and NO offers can sum to more than $1, which changes how you interpret “mispricing” signals. citeturn18view15turn18view19  
+
+### Contract design and payoff topology
+
+Prediction markets can be:
+- **binary** (YES/NO),  
+- **categorical** (one‑of‑K), or  
+- **threshold/bin markets** (a set of mutually exclusive outcomes used for density inference). citeturn18view14turn18view19  
+
+Contract design interacts with microstructure:
+
+- Tokenized systems can introduce **mint/burn/convert** operations (claim issuance and merging) that do not exist in equities and can inflate naïve volume metrics unless decomposed carefully. citeturn18view18turn8view3turn18view19  
+- Some designs can enforce the $1 constraint via explicit mint/merge arbitrage operations, which changes both arbitrage signals and manipulation strategies. citeturn18view19turn18view18  
+
+### Resolution rules, oracle risk, and wording ambiguity
+
+Prediction markets place an unusually large portion of “fundamental risk” into **rule interpretation and settlement governance**. A major crypto prediction market describes resolution through an optimistic oracle where anyone can propose or dispute outcomes and disputes can lead to a token‑holder vote; official help text emphasizes that resolution follows predefined rules shown in the market interface. citeturn0search1turn0search17turn0search29  
+Regulatory guidance explicitly treats settlement source reliability and manipulation resistance as core to contract design and “not readily susceptible to manipulation” obligations. citeturn18view2turn18view3  
+
+These resolution features create new classes of informed trading and manipulation:
+
+- **“Interpretation arbitrage”**: trading based on superior understanding of wording edge cases. citeturn18view2turn0search17  
+- **Oracle/resolution influence**: trading where the actor can influence the settlement data or process; regulators explicitly identify incentives to influence settlement inputs, and exchange rules restrict insiders who can influence the underlying. citeturn18view2turn18view6  
+
+### Leverage, shorting constraints, and market access
+
+In many prediction markets, exposure is naturally bounded and “shorting” is implemented as taking the opposite side (buying NO instead of borrowing shares). This changes classic equity‑market signals like short‑interest dynamics, borrow fees, and locate constraints, replacing them with **collateralization rules** and **YES/NO position construction**. citeturn18view19turn0search29  
+Where leveraged or margin trading exists (more common in crypto contexts), it can introduce cross‑market risk and liquidation‑driven order flow, which needs explicit modeling rather than being assumed away. citeturn8view2turn10search10  
+
+## Variables unique to prediction markets
+
+### Market wording ambiguity and semantic non‑fungibility
+
+Unlike equities, the “asset” in a prediction market is a natural‑language contract. This introduces variables that are not merely metadata but structural determinants of price formation and abuse risk:
+
+- **Ambiguity and edge‑case density** (how many plausible interpretations or sources exist). Regulators stress the importance of identifying specific settlement methodologies and data sources to reduce manipulability. citeturn18view3turn18view2  
+- **Rule revisions and clarifications** (a major “information event” itself). Prediction‑market documentation treats resolution rules as central and user‑visible. citeturn0search17turn0search29  
+
+### Oracle/dispute mechanics as endogenous microstructure
+
+For on‑chain markets using an optimistic oracle, features include:
+
+- **Dispute likelihood proxies** (historical dispute rate by category; governance participation; bond sizes if exposed). citeturn0search1turn0search29turn0search25  
+- **Time‑to‑finality** (expected delay to settlement) as a discount factor that can keep prices away from hard 0/1 even on “known” outcomes. citeturn0search17turn18view2  
+
+### Liquidity provisioning subsidies, fee curves, and incentive programs
+
+Prediction markets can use explicit incentives that distort volume and trader classification:
+
+- Variable **taker fees by price level** can shape “retail‑like” flow (overpaying for immediacy) versus sophisticated liquidity supply. citeturn10search10turn18view15  
+- Maker rebate programs can incentivize quoting and, if poorly designed, can unintentionally encourage wash trading or self‑trading loops. citeturn10search18turn13view0  
+
+### Off‑platform information leakage and coordination
+
+Prediction markets are particularly sensitive to information flows from:
+
+- social media,  
+- private chats, and  
+- public “watching” of large trades or wallets, especially in on‑chain settings where activity is publicly auditable. citeturn18view18turn12view1turn13view0  
+
+This motivates incorporating objective off‑platform signals (timestamps of posts, subreddit/news releases, public API changes) as exogenous covariates in event‑window tests rather than treating price moves as self‑contained. citeturn21view5turn12view1  
+
+## Detection methods and recommended adaptations
+
+This section organizes adaptations by method family and provides concrete feature lists, model types, and evaluation metrics. The recommendations are guided by (i) regulator expectations for event‑contract surveillance and audit trails, (ii) the legal definitions of spoofing and anti‑fraud scope, and (iii) empirical prediction‑market work showing thinness, maker/taker segmentation, and on‑chain measurement pitfalls. citeturn18view1turn18view11turn18view13turn18view15turn18view18  
+
+### Proxy rules for trader classification
+
+**Goal**: segment accounts into behavioral types (retail‑like vs professional; informed vs noise; potential insiders) when you lack direct labels or when labels are too coarse.
+
+Recommended proxy dimensions:
+
+- **Role features**: maker vs taker share; quote persistence; spread capture proxies. citeturn18view15turn10search14  
+- **Complexity features**: cross‑market participation, arbitrage pathway usage, and order management sophistication, critical for tokenized markets with multiple trade mechanisms. citeturn8view3turn18view19  
+- **Timing features**: concentration of activity in the minutes/hours before key announcements or resolution. citeturn7search25turn18view2  
+
+Model types:
+- Unsupervised clustering (k‑means / GMM on log‑scaled features) for discoverable archetypes.  
+- Supervised classification if you can label “maker accounts,” “API keys,” or “market maker program participants.” citeturn10search8turn18view6  
+
+Evaluation metrics:
+- Stability of clusters over time;  
+- Predictive validity: do “informed‑like” clusters show higher event‑window profit/accuracy net of fees and execution? citeturn18view15turn10search10turn12view1  
+
+### Account‑labeled methods
+
+**Goal**: use exchange metadata (member types, KYC segmentation, surveillance flags) where available. Regulated venues explicitly contemplate restricting participants based on insider status and enforcing prohibited trading. citeturn18view6turn18view1turn7search0  
+
+In a DCM‑style architecture, key labels may include:
+- participant categories (FCM/IB or equivalent),  
+- controlled accounts (employees/affiliates restrictions),  
+- “source agency” or data‑provider affiliations where settlement depends on external sources. citeturn18view6turn18view2  
+
+Evaluation metrics:
+- Coverage (% of volume/accounts with high‑quality labels),  
+- Error rates in label inference for “linked accounts,”  
+- Incremental lift vs proxy-only models.
+
+### PIN/VPIN analogs for prediction markets
+
+**Goal**: detect markets and windows with unusually high probability that order flow is information‑driven (“toxic”) rather than liquidity‑driven—useful both for surveillance prioritization and for manipulation susceptibility scoring.
+
+Practical analogs:
+- Replace “price change” with **probability change**.  
+- Replace “volume buckets” with **risk‑weighted volume**, e.g., notional × p(1−p) to reflect where fee curves and probability sensitivity are largest. citeturn10search10turn18view8  
+- For AMMs, compute toxicity from **state‑dependent slippage** implied by the cost function and the liquidity parameter. citeturn18view8turn18view9  
+
+Why this matters: recent on‑chain evidence shows price impact declines sharply as participation grows, aligning with “thin early markets” being manipulation‑vulnerable. citeturn8view3turn18view18  
+
+Model types:
+- State‑space models (latent “information arrival” intensity) conditioned on event time.  
+- Hawkes‑process features for order arrival/cancellation bursts, reusing crypto‑LOB detection ideas. citeturn0search4  
+
+Evaluation metrics:
+- Predictive power for future mid‑probability moves (short horizon),  
+- Alert calibration by market phase (early vs mature),  
+- False positives during scheduled public announcements.
+
+### Event‑window forensic tests for insider trading
+
+**Goal**: detect “improbably well‑timed” trading before material announcements or resolution.
+
+Prediction markets are unusually suitable for event windows because the outcome is crisp, but the challenge is separating:
+- legitimate fast inference from public information,  
+- interpretation/resolution knowledge, and  
+- MNPI exploitation. citeturn18view2turn12view1turn7search25  
+
+A practical event‑window toolkit:
+
+- **Pre‑event abnormal position building**: detect large directional positions built shortly before an outcome becomes public relative to baseline activity for that contract category.  
+- **Directional concentration**: high concentration in a single contract relative to trader’s normal diversification.  
+- **Cross‑trader outlier success**: “win rate” or risk‑adjusted profit significantly above null, under permutation tests that preserve trade sizes and windows (useful when labels are scarce). citeturn12view1turn18view13turn7search1  
+
+Model types:
+- Survival/hazard models where “news arrival” is the event and trading intensity is a covariate.  
+- Bayesian hierarchical models by domain and horizon (useful because calibration and biases differ by domain and time). citeturn11academia37  
+
+Evaluation metrics:
+- Precision@K alerts per day;  
+- “Time‑to‑detection” (how long before the public release you raise an alert);  
+- Counterfactual robustness against public‑info proxies (news release timestamps, social media bursts). citeturn21view5turn18view2turn6search3  
+
+### Order‑book manipulation detection
+
+**Goal**: detect spoofing/layering, disruptive trading, marking/closing‑period manipulation analogs, and wash‑style “money pass” activity.
+
+Legal anchoring matters: spoofing is framed as bidding/offering with intent to cancel before execution, and interpretive guidance describes behaviors like creating false depth and delaying others’ execution. citeturn18view11turn6search1  
+Regulated prediction market rules can directly prohibit spoofing and wash trades. citeturn18view6turn18view7  
+
+Feature families (order‑book markets):
+- Order lifetime distributions by side and distance from touch  
+- Cancel/replace ratios and “layer depth” signatures  
+- Post‑cancel opposite‑side fill probability (“cancel then hit”)  
+- Quote stuffing/burstiness (Hawkes‑style intensity features) citeturn0search4turn18view11turn18view6  
+
+Model types:
+- Rule‑based pattern detectors for first line monitoring (low latency, interpretable).  
+- Gradient boosted trees or temporal CNN/RNN models on engineered order‑flow features for higher recall. citeturn0search4turn2search9  
+
+Evaluation metrics:
+- True positive rate on manually labeled cases;  
+- Alert deduplication efficiency (unique incidents per N alerts);  
+- Intervention effectiveness (does throttling or account suspension reduce recurrence?). citeturn7search0turn18view6  
+
+### Network/graph methods for coordinated accounts
+
+**Goal**: detect wash trading, Sybil clusters, and coordinated manipulation across accounts/markets.
+
+A working‑paper approach proposes iterative network‑based detection premised on wash traders forming approximately closed clusters that transact mostly among themselves, and applies it to an on‑chain prediction market. citeturn13view0  
+Complementary crypto market research shows statistical regularities (e.g., digit distributions and size rounding) can distinguish regulated vs unregulated exchanges and quantify wash volume at scale—features that can be adapted to prediction market trade data, especially when incentive programs exist. citeturn8view2turn10search18  
+
+Model types:
+- Graph clustering + conductance/closure metrics  
+- Link prediction to identify likely “same‑entity” wallets  
+- Temporal graphs to capture bursts around incentives or events
+
+Evaluation metrics:
+- Cluster purity under known linkages (KYC venues)  
+- Out‑of‑sample persistence of detected clusters  
+- Economic plausibility checks (net position near zero, repetitive trading patterns)
+
+### Recommended feature set table
+
+The table below lists an implementable feature set for trader classification, insider‑likelihood scoring, and manipulation detection. The rationales and sources are grounded in regulator guidance, exchange rules, mechanism design, and empirical transaction‑level prediction market studies. citeturn18view1turn18view6turn18view11turn18view8turn18view18turn13view0  
+
+| Feature name | Rationale | Data source | Expected signal |
+|---|---|---|---|
+| `maker_share` | Role proxy: liquidity provision vs immediacy demand | Trades + maker/taker flag (if available) | Lower for retail‑like; higher for professional LP |
+| `aggressiveness_index` (price vs mid) | Aggressive orders are costlier; often linked to urgency/information | Order book snapshots + trades | Spikes before news; higher in uninformed “chasing” |
+| `order_to_trade_ratio` | High cancel/replace can indicate automation or spoofing attempts | Full order log | Very high + short lifetimes → spoof/layer risk |
+| `median_order_lifetime_ms` | Spoofing often uses short‑lived depth | Level‑3 order log | Short lifetimes far from touch → spoof signal |
+| `cancel_then_opposite_fill_rate` | Classic spoof pattern: cancel then take other side | Level‑3 order log | Elevated during manipulation episodes |
+| `depth_weighted_imbalance` | Imbalance proxies directional pressure and potential info | Order book snapshots | Predictive near events; also manipulable in thin markets |
+| `probability_impact_per_$` | Core informativeness/toxicity measure | Trades + mid‑probability series | High early in market; spikes for informed flow |
+| `slippage_curve` | Thinness/manipulability indicator | Order book or AMM state | Steeper curve → easier manipulation |
+| `time_to_resolution_hours` | Event‑time conditioning for all signals | Market metadata | MNPI risk intensifies as resolution nears |
+| `pre_announcement_trade_intensity` | Insider‑likelihood proxy | Trades + external event calendar | Spikes preceding scheduled releases |
+| `position_concentration_hhi` | Single‑market focus can indicate event‑specific MNPI | Positions across markets | Highly concentrated positions near key events |
+| `cross_market_participation_count` | Arbitrage/sophistication proxy | Account activity across markets | Higher for pro; low for casual |
+| `bundle_or_merge_usage_rate` | Exploits contract mechanics/arbitrage pathways | On‑chain logs / platform ops logs | Higher for sophisticated arbitrageurs |
+| `yes_no_price_sum_deviation` | Detect dislocations from $1 bound (fees/liquidity) | Best quotes + fee model | Large deviations + volume → stress/manipulation risk |
+| `fee_paid_per_$risk` | Retail‑like errors often pay high effective fee | Trade fills + fee schedule | Higher for uninformed takers |
+| `wash_loop_score` (graph closure) | Collusive wash trading forms closed clusters | Trade counterparty graph / on‑chain transfers | High for wash clusters; low for organic flow |
+| `round_number_trade_fraction` | Fabricated or incentivized volume often clusters | Trades | Elevated under wash/incentive exploitation |
+| `sudden_new_account_large_bet` | Operationally useful insider flag | Account creation + trades | High alert value near sensitive events |
+| `restricted_insider_overlap` | Enforce insider restrictions where applicable | KYC + restricted lists | Direct compliance trigger |
+| `resolution_dispute_proxy` | Oracle risk can explain deviations & strategic attacks | Oracle dispute records + category stats | Higher uncertainty; higher manipulation incentives |
+| `social_signal_lead_time` | Separate public info from MNPI | Social/news timestamps | If trade leads public signals consistently → MNPI risk |
+| `abnormal_win_rate_permtest` | Forensic “improbably successful” screening | Settled outcomes + trade history | Flags persistent anomalous performance |
+
+## Data requirements and empirical validation strategy
+
+### Data requirements and practical challenges
+
+**Granularity requirements (order‑book markets)**  
+To detect spoofing, wash trading, and informed aggressiveness reliably, you need Level‑3 order logs (submit/modify/cancel), not only trades and top‑of‑book. This aligns with the legal framing of spoofing as intent‑to‑cancel and the reliance on order lifecycle evidence. citeturn18view11turn18view6  
+
+**Audit trails and participant metadata (KYC venues)**  
+Regulatory guidance emphasizes DCM responsibilities for surveillance and obtaining trader‑level data when anomalies occur, and exchange rules can define insiders and prohibited practices, making labeled enforcement feasible if data retention is adequate. citeturn18view1turn18view6turn7search0  
+
+**On‑chain transparency (crypto venues)**  
+On‑chain settlement can provide an unusually complete trace, but measurement is subtle: tokenized prediction markets may include share minting/burning/conversion that inflate naïve volume. Recent research proposes a decomposition into exchange‑equivalent volume and other measures to address this. citeturn18view18turn8view3  
+
+**Off‑exchange and off‑platform data**  
+For both regimes, a significant fraction of “information flow” is external: official data releases, sports injury reports, legislative actions, and social media. Regulatory discussion highlights settlement‑source integrity and the value of official data and information sharing for certain event categories. citeturn18view2turn18view4  
+
+### Proposed empirical tests and validation strategies
+
+Because labeled “insider trading” ground truth is rare, validation must combine multiple strategies:
+
+**Synthetic experiments and simulation**  
+- Simulate spoofing (layer placement + cancel + opposite‑side execution) on historical order books to test detection recall at controlled noise levels; use spoofing definitions and examples from interpretive guidance as constraints. citeturn18view11turn0search4  
+- Simulate wash trading via synthetic closed clusters and test graph‑closure methods’ detection thresholds. citeturn13view0turn8view2  
+
+**Backtests with outcome‑based labels**  
+- Use market resolution as objective ground truth and evaluate whether “informed‑likelihood” scores predict **net‑of‑fees** returns and settlement accuracy, stratified by horizon and domain because prediction markets show structured calibration differences. citeturn10search10turn11academia37turn0search17  
+
+**A/B tests and policy interventions (platform level)**  
+- Test whether tightening maker incentive programs reduces wash‑like patterns without destroying liquidity (requires pre/post causal designs). Maker rebates and fee structures are explicitly configurable on some platforms. citeturn10search18turn10search10turn13view0  
+
+**Causal inference designs**  
+- Difference‑in‑differences around exogenous contract rule changes or settlement source changes, focusing on whether “information advantage” concentrates in a subset of accounts. citeturn18view2turn0search17  
+
+Evaluation metrics that work in low‑label environments:
+- Precision@K alerts; false positives per 10,000 accounts/day  
+- Time‑to‑detection relative to public release  
+- Economic materiality (expected harm reduced per intervention)  
+- Human reviewer throughput and agreement rates (inter‑rater reliability)
+
+## Operational surveillance architecture and implementation roadmap
+
+### Surveillance workflow
+
+The workflow below reflects regulator expectations around surveillance and audit trails for regulated venues, and extends it with on‑chain and off‑platform enrichment for crypto venues. citeturn18view1turn7search0turn7search2turn13view0  
+
+```mermaid
+flowchart TD
+  A[Data ingestion] --> B[Normalization & identity layer]
+  B --> C[Feature store]
+
+  A --> A1[Trades & fills]
+  A --> A2[Level-2/Level-3 order events]
+  A --> A3[Market metadata & contract rules]
+  A --> A4[Settlement/oracle events]
+  A --> A5[External event calendar & news/social timestamps]
+  A --> A6[On-chain logs and transfers]
+
+  C --> D1[Real-time rule engine]
+  C --> D2[Streaming anomaly models]
+  C --> D3[Batch graph analytics]
+  C --> D4[Event-window forensic tests]
+
+  D1 --> E[Alert queue & deduplication]
+  D2 --> E
+  D3 --> E
+  D4 --> E
+
+  E --> F[Case management]
+  F --> G[Analyst triage]
+  G --> H{Action?}
+
+  H -->|No| I[Close with audit note]
+  H -->|Yes| J[Mitigation]
+  J --> J1[Throttle/cancel/tighten limits]
+  J --> J2[Account restrictions or suspension]
+  J --> J3[Contract risk controls: limits, pauses, settlement safeguards]
+  J --> K[Referral package]
+  K --> L[Internal enforcement / regulator coordination]
+```
+
+### Real‑time vs batch tradeoffs
+
+Real‑time monitoring is most valuable for:
+- disruptive order tactics (spoofing/layering) where prevention requires low latency; citeturn18view11turn18view6  
+- imminent MNPI windows (hours/minutes before key releases) where rapid escalation and trading restrictions can reduce harm. citeturn7search25turn18view2  
+
+Batch analytics is most valuable for:
+- network‑based wash trading and Sybil detection; citeturn13view0turn8view2  
+- performance‑based anomaly screening that needs settled outcomes; citeturn12view1turn11academia37  
+- contract design reviews and post‑mortems to update risk taxonomies. citeturn18view3turn18view2  
+
+### Implementation timeline
+
+```mermaid
+gantt
+  title Prediction-market surveillance implementation timeline
+  dateFormat  YYYY-MM-DD
+  axisFormat  %b %d
+
+  section Foundations
+  Define contract taxonomy & event calendar integration :a1, 2026-04-15, 14d
+  Data retention, audit trail, and logging standards   :a2, 2026-04-15, 21d
+  Identity layer (KYC + wallet clustering)             :a3, 2026-04-22, 28d
+
+  section Baseline detectors
+  Real-time rule engine (spoofing/wash/prearranged)    :b1, 2026-05-06, 28d
+  Maker/taker + aggression feature pipeline            :b2, 2026-05-06, 21d
+  Event-window abnormal trading tests                  :b3, 2026-05-13, 28d
+
+  section Advanced analytics
+  Graph-based wash/Sybil analytics                     :c1, 2026-06-03, 35d
+  Toxicity/price-impact models conditioned on event time :c2, 2026-06-10, 35d
+  Unsupervised anomaly models with explainability      :c3, 2026-06-10, 35d
+
+  section Operations
+  Case management + analyst workflows                  :d1, 2026-05-20, 28d
+  Benchmarking, red-teaming, and synthetic simulations :d2, 2026-06-24, 28d
+  Governance: thresholds, audits, escalation protocols :d3, 2026-07-08, 21d
+```
+
+## Legal, regulatory, and ethical considerations with a prioritized research agenda
+
+### Legal and regulatory considerations
+
+For regulated event‑contract exchanges, the principal legal and compliance framing mirrors derivatives markets:
+
+- DCM obligations include listing contracts not readily susceptible to manipulation and maintaining the capacity to prevent manipulation and abusive practices, supported by market surveillance and enforcement. citeturn18view1turn18view2  
+- Anti‑fraud authority (including Rule 180.1) is framed as reaching manipulative and deceptive conduct; CFTC materials explicitly note that trading on MNPI in breach of a pre‑existing duty or when obtained by fraud/deception may violate Rule 180.1. citeturn18view13turn7search1turn6search9  
+- Disruptive trading practices like spoofing are addressed by statutory and interpretive guidance emphasizing intent‑to‑cancel and false‑depth behavior. citeturn18view11turn6search24  
+- Exchange rulebooks can define insiders and restrict trading by those with access to MNPI or influence over the underlying event, and can explicitly prohibit wash trading and spoofing. citeturn18view6turn18view7  
+- Enforcement priorities and public advisories indicate increasing focus on prediction market insider trading and related misconduct; the CFTC has issued a prediction markets advisory tied to disciplinary cases involving misuse of nonpublic information and fraud on a DCM. citeturn7search0turn7search25  
+
+For cross‑jurisdiction operation, legal status can be contested, with recent litigation emphasizing federal vs state regulatory authority over certain prediction market offerings. citeturn0news43turn0news41turn2news47  
+
+### Ethical considerations
+
+Prediction markets create concentrated risks that are ethically salient even when legal boundaries are unclear:
+
+- **National security / high‑harm topics**: even if a market is informative, trading on classified or nonpublic government information creates acute integrity and trust harms; public commentary by legal scholars emphasizes this as an emerging issue and proposes regulatory responses. citeturn12view1turn18view2  
+- **False positives and due process**: insider‑likelihood scoring must distinguish public‑signal speed from MNPI; regulators emphasize analytics and patterns, but platform actions need documented standards and human review. citeturn6search3turn18view1  
+- **Transparency vs privacy**: on‑chain transparency enables research and detection but can also enable harassment or “copy trading” herding; KYC venues invert this tradeoff. citeturn18view18turn13view0  
+
+### Prioritized research agenda and concrete next steps
+
+The agenda below prioritizes projects that (i) are platform‑agnostic, (ii) can be validated with observable outcomes, and (iii) align with regulator‑credible taxonomies.
+
+Acquire and standardize datasets  
+Obtain Level‑3 order events and complete fill data (or as close as possible); maintain immutable audit logs; record contract text, rule revisions, settlement source, and resolution timestamps. For crypto markets, ingest on‑chain logs and implement “exchange‑equivalent volume” decomposition to avoid volume artefacts. citeturn18view11turn18view1turn18view18turn7search2  
+
+Build pilot algorithms in three “minimum viable surveillance” lanes  
+First, a spoofing/layering detector using order lifetime, cancel bursts, and cancel‑then‑fill features, anchored in spoofing interpretive guidance. citeturn18view11turn0search4  
+Second, a wash/Sybil module using graph closure and flow‑regularity cues, grounded in network-based wash detection and broader crypto wash‑trading regularities. citeturn13view0turn8view2  
+Third, an event‑window informed‑trading screener conditioned on time‑to‑resolution and external announcement calendars, with permutation‑test calibration for “improbably successful” timing. citeturn18view2turn12view1turn7search25  
+
+Establish evaluation benchmarks  
+Construct benchmark suites by market category: scheduled macro releases (high public‑signal clarity), sports injuries/status (high insider set), and ambiguous political or social events (high wording/oracle risk). The Federal Reserve’s use of high‑frequency macro prediction market data underscores the feasibility of evaluation in scheduled-release domains. citeturn18view14turn7search25turn18view2  
+
+Operationalize governance and escalation  
+Define thresholds by risk tier (contract susceptibility, insider population size, liquidity depth), and create a case management pipeline that produces evidence packages aligned with audit‑trail expectations. Regulatory guidance explicitly expects DCMs to monitor trading and respond to anomalies, and exchange rulebooks provide concrete prohibited‑practice hooks. citeturn18view1turn18view6turn7search0  
+
+Run red‑team simulations  
+Continuously simulate spoofing, wash trading, and coordinated outcome‑influence attempts; use these simulations to stress‑test detection recall and false positive rates, especially in thin markets where manipulation can be “cheap.” citeturn23view1turn18view11turn18view18
